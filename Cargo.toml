@@ -11,12 +11,15 @@ name = "cep78_demo"
 
 [dependencies]
 bincode = "1.3.3"
-casper-client = "2.0.0"
-casper-client-hashing = { package = "casper-hashing", version = "2.0.0" }
-casper-client-types = { package = "casper-types", version = "3.0.0" }
+casper-client = { git = "https://github.com/casper-ecosystem/casper-client-rs", branch = "feat-track-node-2.0"}
+casper-client-types = { package = "casper-types", git = "https://github.com/casper-network/casper-node", branch = "release-2.0.0-rc4" }
 casper-event-standard = "0.5.0"
 casper-hashing = "3.0.0"
 hex = "0.4"
 serde = { version = "1.0", features = ["serde_derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
+
+# https://github.com/casper-ecosystem/casper-client-rs/blob/2227d5ada7a02f9406a7fb0cb290e55bea3e30e5/Cargo.toml#L56-L57
+[patch.crates-io]
+casper-types = { git = "https://github.com/casper-network/casper-node", branch = "release-2.0.0-rc4" }
