@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use casper_client::types::Contract;
-use casper_event_standard::casper_types;
-use casper_types::Key;
+use casper_client_types::Contract;
+
+use casper_client_types::Key;
 
 use crate::error::ToolkitError;
 
@@ -12,7 +12,7 @@ use super::compat;
 ///
 pub fn extract_named_keys(
     contract: Contract,
-) -> Result<casper_types::contracts::NamedKeys, ToolkitError> {
+) -> Result<casper_client_types::addressable_entity::NamedKeys, ToolkitError> {
     let named_keys_result: Result<BTreeMap<String, Key>, ToolkitError> = contract
         .named_keys()
         .map(|named_key| {

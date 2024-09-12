@@ -1,7 +1,11 @@
 pub use casper_event_standard::Schemas;
 
-use casper_event_standard::casper_types;
-use casper_types::bytesrepr::FromBytes;
+use casper_types::{
+    bytesrepr::FromBytes,
+    execution::execution_result_v1::TransformKindV1::WriteCLValue,
+    execution::{ExecutionResult, ExecutionResultV1, TransformKindV2},
+    DeployHash, StoredValue,
+};
 
 use crate::error::ToolkitError;
 use crate::event::Event;
@@ -63,45 +67,96 @@ impl Fetcher {
     ) -> Result<Vec<Event>, ToolkitError> {
         // Build deploy hash.
         let contract_hash_bytes = parse_hash(deploy_hash)?;
-        let deploy_hash = casper_client::types::DeployHash::new(contract_hash_bytes.into());
+        let deploy_hash = DeployHash::new(contract_hash_bytes.into());
 
         let execution_result = self.client.get_deploy_result(deploy_hash).await?;
-        let effects = match execution_result {
-            casper_types::ExecutionResult::Failure { .. } => Err(ToolkitError::FailedDeployError),
-            casper_types::ExecutionResult::Success { effect, .. } => Ok(effect),
-        }?;
+        match execution_result {
+            ExecutionResult::V1(execution_result_v1) => match execution_result_v1 {
+                ExecutionResultV1::Failure { error_message, .. } => {
+                    Err(ToolkitError::FailedDeployError(error_message.to_string()))
+                }
+                ExecutionResultV1::Success { effect, .. } => {
+                    let mut events = vec![];
+                    for entry in effect.transforms {
+                        // Look for data writes into the global state.
+                        let WriteCLValue(clvalue) = entry.transform else {
+                            continue;
+                        };
 
-        let mut events = vec![];
+                        // Look specifically for dictionaries writes.
+                        const DICTIONARY_PREFIX: &str = "dictionary-";
+                        if !entry.key.starts_with(DICTIONARY_PREFIX) {
+                            continue;
+                        }
 
-        for entry in effects.transforms {
-            // Look for data writes into the global state.
-            let casper_types::Transform::WriteCLValue(clvalue) = entry.transform else {
-                continue;
-            };
+                        // Try parsing CES value, but ignore errors - we don't really know if this is CES dictionary,
+                        // because write address is based on key (event ID).
+                        let Ok((_total_length, event_value_bytes)) =
+                            u32::from_bytes(clvalue.inner_bytes())
+                        else {
+                            continue;
+                        };
+                        let Ok((event_name, event_data)) =
+                            parse_raw_event_name_and_data(event_value_bytes)
+                        else {
+                            continue;
+                        };
 
-            // Look specifically for dictionaries writes.
-            const DICTIONARY_PREFIX: &str = "dictionary-";
-            if !entry.key.starts_with(DICTIONARY_PREFIX) {
-                continue;
-            }
+                        // Parse dynamic event data.
+                        let dynamic_event = parse_event(event_name, &event_data, event_schema)?;
 
-            // Try parsing CES value, but ignore errors - we don't really know if this is CES dictionary,
-            // because write address is based on key (event ID).
-            let Ok((_total_length, event_value_bytes)) = u32::from_bytes(clvalue.inner_bytes())
-            else {
-                continue;
-            };
-            let Ok((event_name, event_data)) = parse_raw_event_name_and_data(event_value_bytes)
-            else {
-                continue;
-            };
+                        events.push(dynamic_event);
+                    }
+                    Ok(events)
+                }
+            },
+            ExecutionResult::V2(execution_result_v2) => match &execution_result_v2.error_message {
+                None => {
+                    let mut events = vec![];
+                    for entry in execution_result_v2.effects.value() {
+                        // Look for data writes into the global state.
+                        let TransformKindV2::Write(stored_value) = entry.kind() else {
+                            continue;
+                        };
 
-            // Parse dynamic event data.
-            let dynamic_event = parse_event(event_name, &event_data, event_schema)?;
+                        let StoredValue::CLValue(clvalue) = stored_value else {
+                            continue;
+                        };
 
-            events.push(dynamic_event);
+                        // Look specifically for dictionaries writes.
+                        const DICTIONARY_PREFIX: &str = "dictionary-";
+                        if !entry
+                            .key()
+                            .to_formatted_string()
+                            .starts_with(DICTIONARY_PREFIX)
+                        {
+                            continue;
+                        }
+
+                        // Try parsing CES value, but ignore errors - we don't really know if this is CES dictionary,
+                        // because write address is based on key (event ID).
+                        let Ok((_total_length, event_value_bytes)) =
+                            u32::from_bytes(clvalue.inner_bytes())
+                        else {
+                            continue;
+                        };
+                        let Ok((event_name, event_data)) =
+                            parse_raw_event_name_and_data(event_value_bytes)
+                        else {
+                            continue;
+                        };
+
+                        // Parse dynamic event data.
+                        let dynamic_event = parse_event(event_name, &event_data, event_schema)?;
+
+                        events.push(dynamic_event);
+                    }
+                    Ok(events)
+                }
+                Some(error_message) => {
+                    Err(ToolkitError::FailedDeployError(error_message.to_string()))
+                }
+            },
         }
-
-        Ok(events)
     }
 }

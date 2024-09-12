@@ -38,7 +38,7 @@ pub enum ToolkitError {
 
     /// Expected a successful deploy.
     #[error("failed deploy")]
-    FailedDeployError,
+    FailedDeployError(String),
 
     /// Event name not found in loaded schema.
     #[error("event '{0}' not found in schema")]

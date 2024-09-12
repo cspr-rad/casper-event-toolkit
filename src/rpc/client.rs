@@ -1,12 +1,10 @@
-use casper_client::types::StoredValue;
-use casper_event_standard::casper_types;
-use casper_hashing::Digest;
-use casper_types::{CLValue, HashAddr, URef};
+use casper_types::{
+    addressable_entity::NamedKeys, execution::ExecutionResult, CLValue, DeployHash, Digest,
+    HashAddr, Key, StoredValue, URef,
+};
 
 use crate::error::ToolkitError;
 use crate::rpc::id_generator::JsonRpcIdGenerator;
-
-use super::compat::{self, uref_to_client_types};
 
 pub const DEFAULT_MAINNET_RPC_ENDPOINT: &str = "https://mainnet.casper-node.xyz/rpc";
 pub const DEFAULT_TESTNET_RPC_ENDPOINT: &str = "https://testnet.casper-node.xyz/rpc";
@@ -49,25 +47,21 @@ impl CasperClient {
         )
         .await?;
 
-        let state_root_hash = match response.result.state_root_hash {
+        match response.result.state_root_hash {
             Some(v) => Ok(v),
             None => Err(ToolkitError::UnexpectedError {
                 context: "empty state root hash".into(),
             }),
-        }?;
-        let state_root_hash = compat::digest_from_client_types(&state_root_hash)?;
-
-        Ok(state_root_hash)
+        }
     }
 
     async fn query_global_state(
         &self,
         state_root_hash: Digest,
-        key: casper_client_types::Key,
+        key: Key,
         path: Vec<String>,
     ) -> Result<StoredValue, ToolkitError> {
         // Wrap state root hash.
-        let state_root_hash = compat::digest_to_client_types(&state_root_hash)?;
         let global_state_identifier =
             casper_client::rpcs::GlobalStateIdentifier::StateRootHash(state_root_hash);
 
@@ -92,26 +86,21 @@ impl CasperClient {
     pub(crate) async fn get_contract_named_keys(
         &self,
         contract_hash: HashAddr,
-    ) -> Result<casper_types::contracts::NamedKeys, ToolkitError> {
+    ) -> Result<NamedKeys, ToolkitError> {
         // Fetch latest state root hash.
         let state_root_hash = self.get_state_root_hash().await?;
 
         // Contract is stored directly at given hash.
-        let key = casper_client_types::Key::Hash(contract_hash);
+        let key = Key::Hash(contract_hash);
         let path = vec![];
 
         let stored_value = self.query_global_state(state_root_hash, key, path).await?;
-        let contract = match stored_value {
-            casper_client::types::StoredValue::Contract(v) => Ok(v),
+        match stored_value {
+            StoredValue::Contract(v) => Ok(v.named_keys().clone()),
             _ => Err(ToolkitError::UnexpectedStoredValueType {
                 expected_type: "contract",
             }),
-        }?;
-
-        // Casper client use different type of named keys, so we have to additionally parse it.
-        let contract = crate::rpc::utils::extract_named_keys(contract)?;
-
-        Ok(contract)
+        }
     }
 
     pub(crate) async fn get_stored_clvalue(
@@ -122,20 +111,16 @@ impl CasperClient {
         let state_root_hash = self.get_state_root_hash().await?;
 
         // Build uref key.
-        let uref = uref_to_client_types(uref)?;
-        let key = casper_client_types::Key::URef(uref);
+        let key = Key::URef(*uref);
         let path = vec![];
 
         let stored_value = self.query_global_state(state_root_hash, key, path).await?;
-        let clvalue = match stored_value {
-            casper_client::types::StoredValue::CLValue(v) => Ok(v),
+        match stored_value {
+            StoredValue::CLValue(v) => Ok(v),
             _ => Err(ToolkitError::UnexpectedStoredValueType {
                 expected_type: "clvalue",
             }),
-        }?;
-        let clvalue = compat::clvalue_from_client_types(&clvalue)?;
-
-        Ok(clvalue)
+        }
     }
 
     pub(crate) async fn get_stored_clvalue_from_dict(
@@ -145,14 +130,12 @@ impl CasperClient {
     ) -> Result<CLValue, ToolkitError> {
         // Fetch latest state root hash.
         let state_root_hash = self.get_state_root_hash().await?;
-        let state_root_hash = compat::digest_to_client_types(&state_root_hash)?;
 
         // Build dictionary item identifier.
-        let dictionary_seed_uref = uref_to_client_types(dictionary_seed_uref)?;
         let dictionary_item_key = dictionary_item_key.to_string();
         let dictionary_item_identifier =
             casper_client::rpcs::DictionaryItemIdentifier::new_from_seed_uref(
-                dictionary_seed_uref,
+                *dictionary_seed_uref,
                 dictionary_item_key,
             );
 
@@ -170,21 +153,18 @@ impl CasperClient {
         .await?;
         let stored_value = response.result.stored_value;
 
-        let clvalue = match stored_value {
-            casper_client::types::StoredValue::CLValue(v) => Ok(v),
+        match stored_value {
+            StoredValue::CLValue(v) => Ok(v),
             _ => Err(ToolkitError::UnexpectedStoredValueType {
                 expected_type: "clvalue",
             }),
-        }?;
-        let clvalue = compat::clvalue_from_client_types(&clvalue)?;
-
-        Ok(clvalue)
+        }
     }
 
     pub(crate) async fn get_deploy_result(
         &self,
-        deploy_hash: casper_client::types::DeployHash,
-    ) -> Result<casper_types::ExecutionResult, ToolkitError> {
+        deploy_hash: DeployHash,
+    ) -> Result<ExecutionResult, ToolkitError> {
         // Approvals originally received by the node are okay.
         let finalized_approvals = false;
 
@@ -200,17 +180,13 @@ impl CasperClient {
             finalized_approvals,
         )
         .await?;
-        let mut execution_results = response.result.execution_results;
-
-        let execution_result = match execution_results.len() {
-            1 => Ok(execution_results.remove(0)),
-            _ => Err(ToolkitError::UnexpectedError {
-                context: "execution results count different than 1".into(),
-            }),
-        }?;
-        let execution_result =
-            compat::execution_result_from_client_types(&execution_result.result)?;
-
-        Ok(execution_result)
+        response
+            .result
+            .execution_info
+            .expect("TODO")
+            .execution_result
+            .ok_or(ToolkitError::UnexpectedError {
+                context: "".to_string(),
+            })
     }
 }
